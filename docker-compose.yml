@@ -1,7 +1,3 @@
-# Запуск всего проекта одной командой:  docker compose up --build
-# Все значения имеют dev-умолчания, поэтому работает и без .env.
-# Мало памяти? Не поднимай лишнее:  docker compose up --build --scale worker=0
-
 name: dyadyastem
 
 x-db-env: &db-env
@@ -11,7 +7,7 @@ x-db-env: &db-env
 x-redis-env: &redis-env
   REDIS_URL: redis://redis:6379/0
 
-# S3 = Garage. Имена MINIO_* оставлены, чтобы не ломать уже написанный код.
+# Оставила min io но у нас garage
 x-storage-env: &storage-env
   MINIO_ENDPOINT: garage:3900
   MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:3900}
@@ -19,8 +15,7 @@ x-storage-env: &storage-env
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-d603fb8e91da1aee1509a10e04e7e9ecbc71e1d2f45a0162a1ebcbcb3ad06fe9}
   MINIO_BUCKET: ${MINIO_BUCKET:-dyadyastem}
   MINIO_SECURE: "false"
-  S3_REGION: garage   # должен совпадать с s3_region в infra/garage/garage.toml
-  # новые boto3 по умолчанию шлют контрольные суммы, с которыми S3-совместимые хранилища дружат не всегда
+  S3_REGION: garage
   AWS_REQUEST_CHECKSUM_CALCULATION: when_required
   AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
 
@@ -29,10 +24,9 @@ x-limits-env: &limits-env
   MAX_DURATION_SEC: ${MAX_DURATION_SEC:-600}
 
 services:
-  # ---------- PostgreSQL ----------
+  #PostgreSQL
   postgres:
     image: postgres:16-alpine
-    # урезанная память: для разработки хватает
     command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=30"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-dyadya}
@@ -49,10 +43,9 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # ---------- Redis (брокер Celery) ----------
+  #Redis
   redis:
     image: redis:7-alpine
-    # noeviction: брокер не должен терять задачи; 128 МБ с запасом
     command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
     volumes:
       - redis_data:/data
@@ -65,7 +58,7 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # ---------- Garage (S3) ----------
+  #Garage
   garage:
     image: dxflrs/garage:v1.0.1
     environment:
@@ -75,18 +68,17 @@ services:
       - garage_meta:/var/lib/garage/meta
       - garage_data:/var/lib/garage/data
     ports:
-      - "3900:3900"   # S3 API: отсюда браузер скачивает дорожки
+      - "3900:3900"
     healthcheck:
-      test: ["CMD", "/garage", "status"]   # в образе нет shell и curl, поэтому проверяем самим бинарником
+      test: ["CMD", "/garage", "status"]
       interval: 5s
       timeout: 5s
       retries: 20
       start_period: 5s
     restart: unless-stopped
 
-  # ---------- одноразовая настройка Garage: раскладка, ключ, бакет, права, CORS ----------
   garage-init:
-    build: ./backend            # в образе бэкенда уже есть boto3
+    build: ./backend
     image: dyadyastem-backend:dev
     command: ["python", "/init_garage.py"]
     environment:
@@ -100,10 +92,10 @@ services:
       garage:
         condition: service_healthy
     healthcheck:
-      disable: true             # healthcheck из образа бэкенда тут не нужен
+      disable: true
     restart: "no"
 
-  # ---------- Backend (FastAPI) ----------
+  #Backend (FastAPI)
   backend:
     build: ./backend
     image: dyadyastem-backend:dev
@@ -125,12 +117,11 @@ services:
         condition: service_healthy
       garage-init:
         condition: service_completed_successfully
-    # healthcheck (GET /health) описан в backend/Dockerfile
 
-  # ---------- Worker (Celery + Demucs) ----------
+
+  #Worker
   worker:
     build: ./worker
-    # лимит ниже памяти Docker-VM: при нехватке умрёт воркер, а не Postgres. Поменять: WORKER_MEM_LIMIT=3g в .env
     mem_limit: ${WORKER_MEM_LIMIT:-5g}
     environment:
       <<: [*db-env, *redis-env, *storage-env, *limits-env]
@@ -151,14 +142,14 @@ services:
       retries: 5
       start_period: 30s
 
-  # ---------- Frontend (Vite dev-сервер) ----------
+  #Frontend
   frontend:
     build: ./frontend
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
       VITE_USE_MOCKS: ${VITE_USE_MOCKS:-false}
       CHOKIDAR_USEPOLLING: "true"
-      NODE_OPTIONS: "--max-old-space-size=512"   # не даём Node раздуваться
+      NODE_OPTIONS: "--max-old-space-size=512"
     volumes:
       - ./frontend:/app
       - /app/node_modules
