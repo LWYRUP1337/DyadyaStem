@@ -10,16 +10,13 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-
 RUN pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu
 
-
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install -r /tmp/requirements.txt
+COPY requirements.txt .
+RUN pip install -r requirements.txt
 
 RUN pip install --no-deps demucs==4.0.1 \
     && pip install dora-search einops julius lameenc openunmix pyyaml tqdm
-
 
 FROM python:3.11-slim
 
@@ -36,14 +33,10 @@ RUN useradd --create-home --uid 1000 app \
     && mkdir -p /app /models \
     && chown app:app /app /models
 
-
 COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
-
-
 COPY --chown=app:app . .
-
 USER app
 
 CMD ["celery", "-A", "cel", "worker", "--loglevel=INFO", "--concurrency=1"]

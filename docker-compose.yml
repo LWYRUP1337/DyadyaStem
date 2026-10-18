@@ -1,4 +1,7 @@
-# Запуск всего проекта одной командой: docker compose up
+# Запуск всего проекта одной командой:  docker compose up --build
+# Все значения имеют dev-умолчания, поэтому работает и без .env.
+# Мало памяти? Не поднимай лишнее:  docker compose up --build --scale worker=0
+
 name: dyadyastem
 
 x-db-env: &db-env
@@ -8,6 +11,7 @@ x-db-env: &db-env
 x-redis-env: &redis-env
   REDIS_URL: redis://redis:6379/0
 
+# S3 = Garage. Имена MINIO_* оставлены, чтобы не ломать уже написанный код.
 x-storage-env: &storage-env
   MINIO_ENDPOINT: garage:3900
   MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:3900}
@@ -15,15 +19,21 @@ x-storage-env: &storage-env
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-d603fb8e91da1aee1509a10e04e7e9ecbc71e1d2f45a0162a1ebcbcb3ad06fe9}
   MINIO_BUCKET: ${MINIO_BUCKET:-dyadyastem}
   MINIO_SECURE: "false"
+  S3_REGION: garage   # должен совпадать с s3_region в infra/garage/garage.toml
+  # новые boto3 по умолчанию шлют контрольные суммы, с которыми S3-совместимые хранилища дружат не всегда
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
 
 x-limits-env: &limits-env
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
   MAX_DURATION_SEC: ${MAX_DURATION_SEC:-600}
 
 services:
-  # PostgreSQL 
+  # ---------- PostgreSQL ----------
   postgres:
     image: postgres:16-alpine
+    # урезанная память: для разработки хватает
+    command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=30"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-dyadya}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dyadya_dev}
@@ -39,10 +49,11 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # Redis
+  # ---------- Redis (брокер Celery) ----------
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    # noeviction: брокер не должен терять задачи; 128 МБ с запасом
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
     volumes:
       - redis_data:/data
     ports:
@@ -54,23 +65,48 @@ services:
       retries: 10
     restart: unless-stopped
 
-  #Garage S3
+  # ---------- Garage (S3) ----------
   garage:
     image: dxflrs/garage:v1.0.1
     environment:
-      - GARAGE_ALLOW_ANONYMOUS_METRICS=false
+      GARAGE_ALLOW_ANONYMOUS_METRICS: "false"
     volumes:
-      - ./garage.toml:/etc/garage.toml
-      - garage_data:/var/lib/garage/data
+      - ./infra/garage/garage.toml:/etc/garage.toml:ro
       - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
     ports:
-      - "3900:3900"   # S3 API
-      - "3902:3902"   # Web UI
+      - "3900:3900"   # S3 API: отсюда браузер скачивает дорожки
+    healthcheck:
+      test: ["CMD", "/garage", "status"]   # в образе нет shell и curl, поэтому проверяем самим бинарником
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
     restart: unless-stopped
 
-  # Backend
+  # ---------- одноразовая настройка Garage: раскладка, ключ, бакет, права, CORS ----------
+  garage-init:
+    build: ./backend            # в образе бэкенда уже есть boto3
+    image: dyadyastem-backend:dev
+    command: ["python", "/init_garage.py"]
+    environment:
+      <<: *storage-env
+      GARAGE_ADMIN_URL: http://garage:3903
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:-dev_admin_token_change_me}
+      CORS_ORIGINS: ${FRONTEND_ORIGIN:-http://localhost:5173},http://127.0.0.1:5173
+    volumes:
+      - ./infra/garage/init_garage.py:/init_garage.py:ro
+    depends_on:
+      garage:
+        condition: service_healthy
+    healthcheck:
+      disable: true             # healthcheck из образа бэкенда тут не нужен
+    restart: "no"
+
+  # ---------- Backend (FastAPI) ----------
   backend:
     build: ./backend
+    image: dyadyastem-backend:dev
     environment:
       <<: [*db-env, *redis-env, *storage-env, *limits-env]
       JWT_SECRET: ${JWT_SECRET:-dev_secret_change_me}
@@ -87,12 +123,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      garage:
-        condition: service_started
+      garage-init:
+        condition: service_completed_successfully
+    # healthcheck (GET /health) описан в backend/Dockerfile
 
-  # Worker
+  # ---------- Worker (Celery + Demucs) ----------
   worker:
     build: ./worker
+    # лимит ниже памяти Docker-VM: при нехватке умрёт воркер, а не Postgres. Поменять: WORKER_MEM_LIMIT=3g в .env
+    mem_limit: ${WORKER_MEM_LIMIT:-5g}
     environment:
       <<: [*db-env, *redis-env, *storage-env, *limits-env]
     volumes:
@@ -103,8 +142,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      garage:
-        condition: service_started
+      garage-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "celery -A cel inspect ping -d celery@$$HOSTNAME --timeout 5"]
       interval: 30s
@@ -112,13 +151,14 @@ services:
       retries: 5
       start_period: 30s
 
-  #Frontend
+  # ---------- Frontend (Vite dev-сервер) ----------
   frontend:
     build: ./frontend
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
       VITE_USE_MOCKS: ${VITE_USE_MOCKS:-false}
       CHOKIDAR_USEPOLLING: "true"
+      NODE_OPTIONS: "--max-old-space-size=512"   # не даём Node раздуваться
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -131,6 +171,6 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  garage_data:
   garage_meta:
+  garage_data:
   torch_cache:
