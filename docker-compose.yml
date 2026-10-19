@@ -1,37 +1,36 @@
 name: dyadyastem
 
 x-db-env: &db-env
-  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dyadya}:${POSTGRES_PASSWORD:-dyadya_dev}@postgres:5432/${POSTGRES_DB:-dyadyastem}
-  DATABASE_URL_SYNC: postgresql+psycopg2://${POSTGRES_USER:-dyadya}:${POSTGRES_PASSWORD:-dyadya_dev}@postgres:5432/${POSTGRES_DB:-dyadyastem}
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  DATABASE_URL_SYNC: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
 
 x-redis-env: &redis-env
   REDIS_URL: redis://redis:6379/0
 
-# Оставила min io но у нас garage
 x-storage-env: &storage-env
   MINIO_ENDPOINT: garage:3900
-  MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT:-http://localhost:3900}
-  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-GK2ade727f030bfc7d6a156c42}
-  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-d603fb8e91da1aee1509a10e04e7e9ecbc71e1d2f45a0162a1ebcbcb3ad06fe9}
-  MINIO_BUCKET: ${MINIO_BUCKET:-dyadyastem}
+  MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT}
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+  MINIO_BUCKET: ${MINIO_BUCKET}
   MINIO_SECURE: "false"
   S3_REGION: garage
   AWS_REQUEST_CHECKSUM_CALCULATION: when_required
   AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
 
 x-limits-env: &limits-env
-  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
-  MAX_DURATION_SEC: ${MAX_DURATION_SEC:-600}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}
+  MAX_DURATION_SEC: ${MAX_DURATION_SEC}
 
 services:
-  #PostgreSQL
+  # PostgreSQL
   postgres:
     image: postgres:16-alpine
     command: ["postgres", "-c", "shared_buffers=64MB", "-c", "max_connections=30"]
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-dyadya}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dyadya_dev}
-      POSTGRES_DB: ${POSTGRES_DB:-dyadyastem}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -43,7 +42,7 @@ services:
       retries: 10
     restart: unless-stopped
 
-  #Redis
+  # Redis
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
@@ -58,7 +57,7 @@ services:
       retries: 10
     restart: unless-stopped
 
-  #Garage
+  # Garage
   garage:
     image: dxflrs/garage:v1.0.1
     environment:
@@ -84,8 +83,8 @@ services:
     environment:
       <<: *storage-env
       GARAGE_ADMIN_URL: http://garage:3903
-      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:-dev_admin_token_change_me}
-      CORS_ORIGINS: ${FRONTEND_ORIGIN:-http://localhost:5173},http://127.0.0.1:5173
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+      CORS_ORIGINS: ${FRONTEND_ORIGIN},http://127.0.0.1:5173
     volumes:
       - ./infra/garage/init_garage.py:/init_garage.py:ro
     depends_on:
@@ -95,16 +94,16 @@ services:
       disable: true
     restart: "no"
 
-  #Backend (FastAPI)
+  # Backend (FastAPI)
   backend:
     build: ./backend
     image: dyadyastem-backend:dev
     environment:
       <<: [*db-env, *redis-env, *storage-env, *limits-env]
-      JWT_SECRET: ${JWT_SECRET:-dev_secret_change_me}
-      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      JWT_EXPIRE_DAYS: ${JWT_EXPIRE_DAYS:-7}
-      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: ${JWT_ALGORITHM}
+      JWT_EXPIRE_DAYS: ${JWT_EXPIRE_DAYS}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}
       WATCHFILES_FORCE_POLLING: "true"
     volumes:
       - ./backend:/app
@@ -118,11 +117,10 @@ services:
       garage-init:
         condition: service_completed_successfully
 
-
-  #Worker
+  # Worker
   worker:
     build: ./worker
-    mem_limit: ${WORKER_MEM_LIMIT:-5g}
+    mem_limit: ${WORKER_MEM_LIMIT}
     environment:
       <<: [*db-env, *redis-env, *storage-env, *limits-env]
     volumes:
@@ -142,12 +140,12 @@ services:
       retries: 5
       start_period: 30s
 
-  #Frontend
+  # Frontend
   frontend:
     build: ./frontend
     environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
-      VITE_USE_MOCKS: ${VITE_USE_MOCKS:-false}
+      VITE_API_URL: ${VITE_API_URL}
+      VITE_USE_MOCKS: ${VITE_USE_MOCKS}
       CHOKIDAR_USEPOLLING: "true"
       NODE_OPTIONS: "--max-old-space-size=512"
     volumes:
