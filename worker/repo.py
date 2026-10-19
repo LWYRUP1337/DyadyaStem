@@ -21,8 +21,9 @@ def clear_tracks(project_id: uuid.UUID) -> None:
         session.execute(delete(tracks).where(tracks.c.project_id == project_id))
 
 
+
 def mark_ready(project_id: uuid.UUID, duration_sec: int, stem_keys: dict[str, str]) -> None:
-    """Одной транзакцией: дорожки + статус ready, чтобы не осталось полусостояния."""
+
     with Session(engine) as session, session.begin():
         session.execute(delete(tracks).where(tracks.c.project_id == project_id))
         session.execute(

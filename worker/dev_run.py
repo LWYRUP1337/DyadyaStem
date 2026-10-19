@@ -1,8 +1,5 @@
-"""Помощник для разработки: прогоняет process_audio без бэкенда.
-
-Запуск:  docker compose exec worker python dev_run.py track.mp3 [htdemucs|htdemucs_6s]
-Положи track.mp3 в папку worker/ (она смонтирована в контейнер как /app).
-Нужны таблицы в БД: миграции бэкенда или схема, выгруженная из dbdiagram (Export -> PostgreSQL).
+"""
+docker compose exec worker python dev_run.py track.mp3 [htdemucs|htdemucs_6s]
 """
 import sys
 import time
@@ -48,7 +45,7 @@ def main() -> None:
             ),
             {"id": project_id, "uid": str(user_id), "name": path.stem, "model": model, "key": key},
         )
-        
+
 
 
     process_audio.delay(project_id)  # через очередь: подхватит запущенный воркер

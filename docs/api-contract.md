@@ -13,6 +13,7 @@
 - Порядок дорожек: бэкенд всегда отдаёт `tracks` в фиксированном порядке `vocals, drums, bass, other, guitar, piano` (отсутствующие пропускаются). Поля `order` нет.
 - Длины: `name` проекта 1–100 символов, `song_title` до 100, имя фрагмента 1–50.
 
+
 ### Общие JSON-структуры
 
 **`stem_volumes`** — состояние микшера. Ключ — тип стема (не id дорожки), передаётся всегда целиком:
@@ -37,6 +38,7 @@
 `step_percent` — прибавка за шаг в процентах от оригинала (`5` → `tempo_ratio += 0.05`). `max_percent` — потолок в процентах от оригинала (`150` → `tempo_ratio` не больше `1.5`). Границы: `repeats_to_speedup` 1–10, `step_percent` 2–25, `max_percent` 100–150. Валидируется на фронте и на бэке.
 
 ---
+внешний порт postgres 5433, внутренний 5432
 
 ## Сущности (БД)
 
@@ -61,7 +63,7 @@
 | model | enum | `htdemucs` \| `htdemucs_6s` |
 | duration_sec | int, nullable | заполняется воркером после обработки |
 | **source_url** | varchar(2048), nullable | **прямая ссылка на mp3, если проект создан из ссылки (импорт xlsx)** |
-| source_file_key | varchar, nullable | исходный mp3 в MinIO: при загрузке файлом ставится сразу, при `source_url` — воркером после скачивания; нужен для retry, после `ready` можно удалять |
+| source_file_key | varchar, nullable | исходный mp3 в garage: при загрузке файлом ставится сразу, при `source_url` — воркером после скачивания; нужен для retry, после `ready` можно удалять |
 | error_message | text, nullable | если `status = error` |
 | created_at, updated_at | timestamp |  |
 
@@ -72,7 +74,7 @@
 | id | UUID | PK |
 | project_id | UUID | FK → projects, cascade, индекс |
 | stem_type | enum | `vocals` \| `drums` \| `bass` \| `other` \| `guitar` \| `piano` (последние два только для `htdemucs_6s`) |
-| file_key | varchar | путь в MinIO; наружу только через presigned URL |
+| file_key | varchar | путь в garage; наружу только через presigned URL |
 | created_at | timestamp |  |
 
 Уникальный индекс `(project_id, stem_type)`.
@@ -202,7 +204,7 @@ source_url: "https://example.com/track.mp3"
 4. Читается потоком, обрыв при превышении 25 МБ.
 5. Тип проверяется по содержимому (признак mp3: тег `ID3` или MPEG frame sync), а не только по `Content-Type`.
 6. После скачивания проверяется длительность ≤ 10 минут.
-7. Файл кладётся в MinIO, пишется `source_file_key`. При любом нарушении: `status = error`, `error_message` с понятной причиной (например, «Не удалось скачать файл по ссылке: файл больше 25 МБ»).
+7. Файл кладётся в garage, пишется `source_file_key`. При любом нарушении: `status = error`, `error_message` с понятной причиной (например, «Не удалось скачать файл по ссылке: файл больше 25 МБ»).
 
 **`GET /projects/{id}/status`** — polling каждые 1–2 секунды, остановка на `ready` или `error`
 
@@ -404,7 +406,7 @@ source_url: "https://example.com/track.mp3"
 3. **JWT** — один access-токен, срок \~7 дней, без refresh в MVP, на фронте в `localStorage`.
 4. **Celery** — бэкенд ставит задачу по имени через `send_task`, код воркера не импортирует.
 5. **Воркер пишет в Postgres напрямую** (синхронная сессия SQLAlchemy, минимальные модели `projects` и `tracks`).
-6. **Presigned URL и Docker.** Ссылки подписываются публичным адресом MinIO (`MINIO_PUBLIC_ENDPOINT`), доступным из браузера.
+6. **Presigned URL и Docker.**Ссылки подписываются публичным адресом Garage (MINIO_PUBLIC_ENDPOINT или S3_PUBLIC_ENDPOINT), доступным из браузера. (Примечание: имя переменной в .env для совместимости можно оставить MINIO_PUBLIC_ENDPOINT, но по смыслу это адрес Garage).
 7. **Импорт xlsx разбирается на клиенте**, создание проектов идёт через обычный `POST /projects`. Лимиты: 1 МБ, 10 строк, не более 10 проектов в `processing` у одного пользователя.
 8. **Экспорт xlsx генерируется на бэкенде** одним запросом (`GET /export`).
 9. **Скачивание по ссылке — только в воркере**, с защитой от SSRF (правила в `POST /projects`).
